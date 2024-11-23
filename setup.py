@@ -9,13 +9,6 @@ setup(
         'openai',
         'python-dotenv',
         'httpx[socks]',
-        'qianfan',
-        'pyyaml'
-    ],
-    entry_points={
-        'console_scripts': [
-            'organize-bookmarks=src.main:main',
-        ],
-    },
-    python_requires='>=3.8',
+        'qianfan'
+    ]
 ) 
