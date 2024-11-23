@@ -1,0 +1,22 @@
+# 测试专用配置
+api:
+  ernie:
+    model: "ernie-speed-test"
+    batch_size: 5
+    temperature: 0.1
+    top_p: 0.95
+  chatgpt:
+    model: "gpt-3.5-turbo-test"
+    batch_size: 5
+    temperature: 0.1
+    max_tokens: 1000
+
+monitoring:
+  enabled: false
+  log_level: "DEBUG"
+  performance_threshold: 1.0
+
+testing:
+  bookmarks_count: 5
+  test_data_path: "tests/data/test_bookmarks.html"
+  expected_results_path: "tests/data/expected_results.json" 
