@@ -45,6 +45,8 @@ venv.bak/
 .settings/
 
 # Project specific
+data/analysis/*
+!data/analysis/.gitkeep
 data/input/*
 !data/input/.gitkeep
 data/output/*
