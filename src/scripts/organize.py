@@ -24,19 +24,27 @@ def organize_bookmarks(input_file: Path, output_file: Path, model_dir: Path):
     """组织书签文件"""
     try:
         # 加载模型
+        logger.info("正在加载模型...")
         model = FastTextModel()
         model.load_model(model_dir)
+        logger.info("模型加载完成")
         
         # 读取书签文件
+        logger.info(f"正在读取书签文件: {input_file}")
         with open(input_file, "r", encoding="utf-8") as f:
             soup = BeautifulSoup(f, "html.parser")
             
+        # 统计书签数量
+        bookmarks = soup.find_all("a")
+        total = len(bookmarks)
+        logger.info(f"找到 {total} 个书签")
+            
         # 处理每个书签
-        total = len(soup.find_all("a"))
         processed = 0
         skipped = 0
         
-        for link in soup.find_all("a"):
+        logger.info("开始组织书签...")
+        for link in bookmarks:
             try:
                 title = link.text.strip()
                 url = link.get("href", "")
@@ -57,23 +65,29 @@ def organize_bookmarks(input_file: Path, output_file: Path, model_dir: Path):
                 move_to_folder(link, predictions, soup)
                 processed += 1
                 
+                # 定期显示进度
+                if processed % 100 == 0:
+                    logger.info(f"已组织: {processed}/{total} ({processed/total:.1%})")
+                
             except Exception as e:
-                logger.warning(f"处理书签失败：{title} - {str(e)}")
+                logger.warning(f"组织书签失败：{title} - {str(e)}")
                 skipped += 1
                 continue
             
         # 保存组织后的书签
+        logger.info("正在保存组织后的书签...")
         output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(str(soup))
             
         logger.info(f"书签组织完成，已保存到：{output_file}")
-        logger.info(f"总计处理：{total} 个书签")
-        logger.info(f"成功：{processed} 个")
-        logger.info(f"失败：{skipped} 个")
+        logger.info("组织统计:")
+        logger.info(f"- 总计书签: {total} 个")
+        logger.info(f"- 成功组织: {processed} 个 ({processed/total:.1%})")
+        logger.info(f"- 组织失败: {skipped} 个 ({skipped/total:.1%})")
         
     except Exception as e:
-        logger.error(f"组织书签失败：{str(e)}")
+        logger.error(f"书签组织失败：{str(e)}")
         raise
 
 def format_title(title: str, predictions: dict) -> str:

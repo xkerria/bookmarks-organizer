@@ -47,15 +47,47 @@ class FastTextModel:
             self._load_word_vectors()
     
     def _load_word_vectors(self):
-        """加载预训练词向量"""
+        """加载预训练词向量（带缓存）"""
         try:
-            vector_path = self.config["word_vectors"]["path"]
-            logger.info(f"加载预训练词向量: {vector_path}")
+            vector_path = Path(self.config["word_vectors"]["path"])
+            cache_path = vector_path.parent / f"{vector_path.stem}.cache.pkl"
+            
+            logger.info(f"加载原始词向量: {vector_path}")
+            
+            # 尝试从缓存加载
+            if cache_path.exists() and cache_path.stat().st_mtime > vector_path.stat().st_mtime:
+                logger.info("从缓存加载词向量...")
+                import pickle
+                with open(cache_path, "rb") as f:
+                    self.word_vectors = pickle.load(f)
+                logger.info("缓存加载完成")
+                return
+            
+            # 加载原始词向量
             self.word_vectors = KeyedVectors.load_word2vec_format(
-                vector_path,
+                str(vector_path),
                 binary=False
             )
+            
+            # 预计算相似度矩阵
+            logger.info("预计算词向量相似度...")
+            self.word_vectors.init_sims(replace=True)
+            
+            # 预热常用词
+            logger.info("预热常用词...")
+            common_words = ["python", "编程", "文档", "教程", "开发", "手册", "指南"]
+            for word in common_words:
+                if word in self.word_vectors:
+                    _ = self.word_vectors[word]
+            
+            # 保存缓存
+            logger.info("保存词向量缓存...")
+            import pickle
+            with open(cache_path, "wb") as f:
+                pickle.dump(self.word_vectors, f)
+            
             logger.info("词向量加载完成")
+            
         except Exception as e:
             logger.warning(f"加载词向量失败: {str(e)}")
             self.word_vectors = None
