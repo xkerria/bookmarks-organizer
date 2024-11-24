@@ -17,8 +17,9 @@ monitoring:
   log_level: "INFO"
   performance_threshold: 5.0  # 秒
 
-# 测试配置
-testing:
-  bookmarks_count: 15
-  test_data_path: "data/testing/bookmarks_test.html"
-  expected_results_path: "data/testing/expected_results.json" 
+# 数据目录配置
+paths:
+  input: "data/input"
+  output: "data/output"
+  analysis: "data/analysis"
+  training: "data/training"

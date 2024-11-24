@@ -19,11 +19,14 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# 测试和覆盖率
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 
-# Virtual Environment
+# 虚拟环境
 venv/
 env/
 ENV/
@@ -44,26 +47,28 @@ venv.bak/
 .pydevproject
 .settings/
 
-# Project specific
+# 项目数据目录
 data/analysis/*
 !data/analysis/.gitkeep
 data/input/*
 !data/input/.gitkeep
 data/output/*
 !data/output/.gitkeep
+data/training/*
+!data/training/.gitkeep
 data/logs/*
 !data/logs/.gitkeep
 tests/data/*
 !tests/data/.gitkeep
 
-# Local configuration
+# 本地配置
 .env
 .env.local
 .env.*.local
 config.local.yaml
 config.*.local.yaml
 
-# Logs
+# 日志
 *.log
 logs/
 *.log.*
@@ -71,14 +76,16 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Temp files
+# 临时文件
 *.tmp
 *.temp
 *.bak
 *.swp
 *~
-
-# Keep example files
-!.env.example
 tmp-*
+
+# 保留示例文件
+!.env.example
+
+# 聊天记录
 chats/
