@@ -38,8 +38,7 @@ class TestConverterPerformance:
         def run_conversion():
             converter.convert_to_fasttext(
                 input_file=large_bookmarks_file,
-                output_dir=output_dir,
-                test_size=0.2
+                output_dir=output_dir
             )
             
         # 使用 pytest-benchmark 测试性能

@@ -143,27 +143,25 @@ converter:
   feature_extraction:
     max_path_keywords: 5
     min_keyword_length: 2
-    stop_words:
-      - 的
-      - 了
-      - 和
-      - 与
-      - 或
-      - 及
-      - 等
-      - the
-      - a
-      - an
-      - and
-      - or
-      - in
-      - on
-      - at
-      - to
-      - for
-      - of
-      - with
-
+    max_text_length: 1000
+    prefixes:
+      - doc
+      - tip
+      - res
+      - entry
+    domain_features: true
+    path_features: true
+    combine_features: true
+    
+  # 数据平衡配置
+  data_balance:
+    min_samples: 15
+    augmentation:
+      noise_levels:
+        low: 0.1
+        medium: 0.2
+      max_augmented: 30
+      
   # 输出格式配置
   output_format:
     label_prefix: "__label__"
@@ -200,12 +198,12 @@ converter:
 model:
   fasttext:
     # 训练参数
-    learning_rate: 0.1
-    epochs: 50
-    word_ngrams: 2
-    embedding_dim: 100
-    min_count: 1
-    loss_func: "ova"  # one-vs-all
+    learning_rate: 0.05  # 降低学习率
+    epochs: 100         # 增加训练轮数
+    word_ngrams: 3     # 增加 n-gram 范围
+    embedding_dim: 300  # 增加维度
+    min_count: 1       # 保留所有特征
+    loss_func: "ova"   # 改用 one-vs-all 损失函数
     
     # 预测参数
     prediction_threshold: 0.3
@@ -217,3 +215,13 @@ model:
       - recall
       - f1
       - per_label_metrics
+      - confusion_matrix
+      - error_cases
+      - label_correlation
+    
+    # 词向量配置
+    word_vectors:
+      enabled: true
+      path: "data/pretrained/sgns.wiki.word"  # 预训练词向量路径
+      min_similarity: 0.6  # 最小相似度阈值
+      max_similar_words: 3  # 每个词最多添加的相似词数

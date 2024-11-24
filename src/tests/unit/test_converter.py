@@ -39,9 +39,9 @@ class TestBookmarkConverter:
         url = "https://github.com/user/project/docs/api/v1/guide.html"
         keywords = converter._extract_path_keywords(url)
         assert len(keywords) <= 5  # 最多5个关键词
-        assert all(k.startswith("path_") for k in keywords)
-        assert "path_docs" in keywords
-        assert "path_api" in keywords
+        assert "project" in keywords
+        assert "docs" in keywords
+        assert "api" in keywords
         
     def test_process_bookmark(self, converter, sample_bookmarks):
         """测试书签处理"""

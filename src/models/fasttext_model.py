@@ -1,11 +1,15 @@
 from pathlib import Path
 import fasttext
 import json
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 import logging
 from src.config import config, TRAINING_DIR, LOGS_DIR
 import re
 import random
+from collections import defaultdict
+from gensim.models import KeyedVectors
+import jieba
+import numpy as np
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -30,411 +34,392 @@ logger.addHandler(console_handler)
 
 class FastTextModel:
     def __init__(self):
-        self.model = None
         self.config = config.config["model"]["fasttext"]
-        self.model_path = TRAINING_DIR / "model.bin"
-        self.metrics_path = TRAINING_DIR / "metrics.json"
+        # 分层模型
+        self.type_model = None      # 类型分类��
+        self.domain_model = None    # 领域分类器
+        self.content_model = None   # 内容分类器
         
-    def train(self, train_file: Path, valid_file: Path = None) -> Dict:
-        """训练模型"""
-        if not train_file.exists():
-            msg = f"训练文件不存在：{train_file}"
-            logger.error(msg)
-            raise FileNotFoundError(msg)
-            
+        # 加载预训练词向量
+        self.word_vectors = None
+        if self.config.get("word_vectors", {}).get("enabled", False):
+            self._load_word_vectors()
+    
+    def _load_word_vectors(self):
+        """加载预训练词向量"""
         try:
-            # 读取训练数据
+            vector_path = self.config["word_vectors"]["path"]
+            logger.info(f"加载预训练词向量: {vector_path}")
+            self.word_vectors = KeyedVectors.load_word2vec_format(
+                vector_path,
+                binary=False
+            )
+            logger.info("词向量加载完成")
+        except Exception as e:
+            logger.warning(f"加载词向量失败: {str(e)}")
+            self.word_vectors = None
+    
+    def train(self, train_file: Path, valid_file: Path = None) -> Dict:
+        """训练分层模型"""
+        try:
+            # 读取数据
             with open(train_file, "r", encoding="utf-8") as f:
-                training_data = f.read().splitlines()
-                
-            # 数据增强
-            enhanced_data = []
-            for sample in training_data:
-                parts = sample.split(" ", 1)
-                if len(parts) == 2:
-                    labels, text = parts
-                    enhanced_text = self._enhance_features(text)
-                    enhanced_data.append(f"{labels} {enhanced_text}")
-                    
-            # 数据平衡
-            balanced_data = self._balance_dataset(enhanced_data)
+                data = f.read().splitlines()
             
-            # 保存处理后的数据
-            processed_file = train_file.parent / "processed_train.txt"
-            with open(processed_file, "w", encoding="utf-8") as f:
-                f.write("\n".join(balanced_data))
-                
+            # 按维度分离数据
+            type_data = self._filter_dimension_data(data, "type_")
+            domain_data = self._filter_dimension_data(data, "domain_")
+            content_data = self._filter_dimension_data(data, "content_")
+            
             # 训练参数
             params = {
-                'lr': float(self.config['learning_rate']),
-                'epoch': int(self.config['epochs']),
-                'wordNgrams': int(self.config['word_ngrams']),
-                'dim': int(self.config['embedding_dim']),
-                'minCount': int(self.config['min_count']),
-                'loss': str(self.config['loss_func']),
+                'lr': self.config["learning_rate"],
+                'epoch': self.config["epochs"],
+                'wordNgrams': self.config["word_ngrams"],
+                'dim': self.config["embedding_dim"],
+                'minCount': self.config["min_count"],
+                'loss': self.config["loss_func"],
                 'verbose': 2,
             }
             
-            logger.info("开始训练模型")
+            logger.info("开始训练分层模型")
             logger.info(f"训练参数：{params}")
-            logger.info(f"训练文件：{processed_file}")
-            if valid_file:
-                logger.info(f"验证文件：{valid_file}")
             
-            # 训练模型
-            self.model = fasttext.train_supervised(
-                input=str(processed_file),
-                **params
-            )
+            # 训练各维度模型
+            metrics = {}
             
-            # 评估模型
-            metrics = self.evaluate(valid_file) if valid_file else {}
+            # 1. 类型分类器
+            logger.info("训练类型分类器...")
+            self.type_model = self._train_dimension_model(
+                "type", type_data, valid_file, params)
+            metrics["type"] = self._evaluate_dimension(
+                "type", self.type_model, valid_file)
+            
+            # 2. 领域分类器
+            logger.info("训练领域分类器...")
+            self.domain_model = self._train_dimension_model(
+                "domain", domain_data, valid_file, params)
+            metrics["domain"] = self._evaluate_dimension(
+                "domain", self.domain_model, valid_file)
+            
+            # 3. 内容分类器
+            logger.info("训练内容分类器...")
+            self.content_model = self._train_dimension_model(
+                "content", content_data, valid_file, params)
+            metrics["content"] = self._evaluate_dimension(
+                "content", self.content_model, valid_file)
             
             # 保存模型和指标
-            self.save_model()
+            self._save_models()
             self.save_metrics(metrics)
             
-            logger.info("模型训练完成")
-            logger.info(f"评估指标：{metrics}")
-            
+            logger.info("分层模型训练完成")
             return metrics
             
         except Exception as e:
             msg = f"模型训练失败：{str(e)}"
             logger.error(msg)
             raise RuntimeError(msg)
-            
-    def evaluate(self, test_file: Path) -> Dict:
-        """评估模型性能"""
-        if not self.model:
-            msg = "模型未训练"
-            logger.error(msg)
-            raise ValueError(msg)
-            
-        if not test_file.exists():
-            msg = f"测试文件不存在：{test_file}"
-            logger.error(msg)
-            raise FileNotFoundError(msg)
-            
+    
+    def _filter_dimension_data(self, data: List[str], prefix: str) -> List[str]:
+        """过滤特定维度的数据"""
+        filtered_data = []
+        for line in data:
+            labels = [l for l in line.split() if l.startswith(f"__label__{prefix}")]
+            if labels:
+                text = " ".join(line.split()[len(labels):])
+                filtered_data.append(f"{' '.join(labels)} {text}")
+        return filtered_data
+    
+    def _train_dimension_model(self, dimension: str, data: List[str], 
+                             valid_file: Path, params: Dict) -> Any:
+        """训练单个维度的模型"""
         try:
-            logger.info("开始评估模型")
+            # 保存维度数据
+            temp_file = TRAINING_DIR / f"{dimension}_train.txt"
+            with open(temp_file, "w", encoding="utf-8") as f:
+                f.write("\n".join(data))
             
-            # 读取测试数据
-            y_true = []
-            y_pred = []
-            skipped = 0
+            # 调整参数
+            local_params = params.copy()
             
-            # 记录每个标签的统计
-            label_stats = {}
+            # 对于小数据集调整参数
+            if len(data) < 100:
+                local_params['minCount'] = 0
+                local_params['epoch'] = min(200, local_params['epoch'])
+                local_params['wordNgrams'] = min(2, local_params['wordNgrams'])
             
-            with open(test_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    # 分割标签和文本
-                    parts = line.strip().split(" ", 1)
-                    if len(parts) != 2:
-                        continue
-                        
-                    # 获取真实标签
-                    true_labels = set(l.replace("__label__", "") 
-                                    for l in parts[0].split() 
-                                    if l.startswith("__label__"))
-                    text = parts[1]
+            # 训练模型
+            model = fasttext.train_supervised(
+                input=str(temp_file),
+                **local_params
+            )
+            
+            return model
+            
+        except Exception as e:
+            logger.error(f"训练 {dimension} 维度失败: {str(e)}")
+            raise
+    
+    def _save_models(self):
+        """保存所有维度的模型"""
+        if self.type_model:
+            self.type_model.save_model(str(TRAINING_DIR / "type_model.bin"))
+        if self.domain_model:
+            self.domain_model.save_model(str(TRAINING_DIR / "domain_model.bin"))
+        if self.content_model:
+            self.content_model.save_model(str(TRAINING_DIR / "content_model.bin"))
+    
+    def load_model(self, model_path: Path, dimension: str = None):
+        """加载指定维度的模型"""
+        try:
+            if dimension:
+                # 加载指定维度的模型
+                model_file = model_path / f"{dimension}_model.bin"
+                if model_file.exists():
+                    if dimension == "type":
+                        self.type_model = fasttext.load_model(str(model_file))
+                    elif dimension == "domain":
+                        self.domain_model = fasttext.load_model(str(model_file))
+                    elif dimension == "content":
+                        self.content_model = fasttext.load_model(str(model_file))
+                    logger.info(f"加载 {dimension} 维度模型成功")
+                else:
+                    logger.warning(f"{dimension} 维度模型文件不存在: {model_file}")
+            else:
+                # 尝试加载所有维度的模型
+                for dim in ["type", "domain", "content"]:
+                    model_file = model_path / f"{dim}_model.bin"
+                    if model_file.exists():
+                        if dim == "type":
+                            self.type_model = fasttext.load_model(str(model_file))
+                        elif dim == "domain":
+                            self.domain_model = fasttext.load_model(str(model_file))
+                        elif dim == "content":
+                            self.content_model = fasttext.load_model(str(model_file))
+                        logger.info(f"加载 {dim} 维度模型成功")
+                    else:
+                        logger.warning(f"{dim} 维度模型文件不存在: {model_file}")
+        except Exception as e:
+            logger.error(f"加载模型失败: {str(e)}")
+            raise
+    
+    def predict_dimension(self, text: str, dimension: str) -> List[str]:
+        """预测指定维度的标签"""
+        model = None
+        if dimension == "type":
+            model = self.type_model
+        elif dimension == "domain":
+            model = self.domain_model
+        elif dimension == "content":
+            model = self.content_model
+        
+        if not model:
+            raise ValueError(f"模型 {dimension} 未加载")
+        
+        # 预处理文本
+        text = text.replace('\n', ' ').replace('\r', ' ')
+        text = ' '.join(text.split())
+        
+        # 预测
+        return self._predict_dimension(model, text)
+    
+    def _predict_dimension(self, model: Any, text: str) -> List[str]:
+        """预测单个维度的标签"""
+        labels, probs = model.predict(text, k=self.config.get("top_k", 3))
+        threshold = self.config.get("prediction_threshold", 0.3)
+        
+        results = []
+        for label, prob in zip(labels, probs):
+            if prob >= threshold:
+                clean_label = str(label).replace("__label__", "")
+                results.append(clean_label)
+                
+        return results
+    
+    def _enhance_features(self, text: str) -> str:
+        """增强文本特征"""
+        features = []
+        
+        # 1. 原始文本
+        features.append(text)
+        
+        # 2. URL特征
+        url_features = re.findall(r'domain_\S+', text)
+        if url_features:
+            features.extend(url_features)
+            # 添加域名部分特征
+            for feature in url_features:
+                parts = feature.split('_')
+                if len(parts) > 2:
+                    features.append(f"site_{parts[-1]}")
+                    # 添加子域名特征
+                    if len(parts) > 3:
+                        features.append(f"subdomain_{parts[-2]}")
+        
+        # 3. 路径特征
+        path_features = re.findall(r'path_\S+', text)
+        if path_features:
+            features.extend(path_features)
+            # 组合相邻路径
+            for i in range(len(path_features)-1):
+                features.append(f"{path_features[i]}_{path_features[i+1]}")
+        
+        # 4. 词组特征
+        words = text.split()
+        if len(words) >= 2:
+            # 双词组合
+            for i in range(len(words)-1):
+                features.append(f"{words[i]}_{words[i+1]}")
+            # 三词组合
+            if len(words) >= 3:
+                for i in range(len(words)-2):
+                    features.append(f"{words[i]}_{words[i+1]}_{words[i+2]}")
+        
+        # 5. 统计特征
+        if len(words) > 0:
+            features.append(f"length_{len(words)}")
+            # 词长度分布
+            word_lengths = [len(w) for w in words]
+            avg_len = sum(word_lengths) / len(word_lengths)
+            features.append(f"avg_word_length_{int(avg_len)}")
+        
+        # 6. 词向量特征
+        if self.word_vectors is not None:
+            # 分词
+            words = jieba.lcut(text)
+            semantic_features = []
+            
+            for word in words:
+                if word in self.word_vectors:
+                    # 获取最相似的词作为特征
+                    similar_words = self.word_vectors.most_similar(word, topn=3)
+                    for sim_word, score in similar_words:
+                        if score > 0.6:  # 只使用相似度高的词
+                            semantic_features.append(f"sim_{sim_word}")
+            
+            features.extend(semantic_features)
+        
+        return " ".join(features)
+    
+    def _evaluate_dimension(self, dimension: str, model: Any, valid_file: Path) -> Dict:
+        """评估单个维度的模型性能"""
+        try:
+            metrics = {
+                "confusion_matrix": defaultdict(lambda: defaultdict(int)),
+                "error_cases": [],
+                "label_correlation": defaultdict(lambda: defaultdict(int)),
+                "per_label_metrics": {}
+            }
+            
+            # 如果没有验证文件，返回空指标
+            if not valid_file or not valid_file.exists():
+                logger.warning(f"{dimension} 维度没有验证数据")
+                return metrics
+            
+            # 读取验证数据
+            with open(valid_file, "r", encoding="utf-8") as f:
+                valid_data = f.read().splitlines()
+            
+            # 过滤当前维度的数据
+            dimension_data = self._filter_dimension_data(valid_data, f"{dimension}_")
+            
+            # 评估每个样本
+            for line in dimension_data:
+                # 分离标签和文本
+                parts = line.split(" ", 1)
+                if len(parts) != 2:
+                    continue
                     
-                    try:
-                        # 预测标签
-                        pred_labels = set(self.predict(text))
-                        
-                        # 更新每个标签的统计
-                        for label in true_labels | pred_labels:
-                            if label not in label_stats:
-                                label_stats[label] = {
-                                    "true_positives": 0,
-                                    "false_positives": 0,
-                                    "false_negatives": 0
-                                }
-                            
-                            if label in true_labels and label in pred_labels:
-                                label_stats[label]["true_positives"] += 1
-                            elif label in pred_labels:
-                                label_stats[label]["false_positives"] += 1
-                            elif label in true_labels:
-                                label_stats[label]["false_negatives"] += 1
-                        
-                        y_true.append(true_labels)
-                        y_pred.append(pred_labels)
-                    except Exception as e:
-                        skipped += 1
-                        logger.warning(f"预测失败，跳过样本：{text[:50]}... - {str(e)}")
-                        continue
-            
-            # 计算整体指标
-            metrics = self._calculate_metrics(y_true, y_pred)
-            metrics["skipped_samples"] = skipped
+                labels_part, text = parts
+                true_labels = set(l.replace("__label__", "") 
+                                for l in labels_part.split() if l.startswith("__label__"))
+                
+                # 预处理文本
+                text = text.replace('\n', ' ').replace('\r', ' ')
+                text = ' '.join(text.split())
+                
+                # 预测标签
+                pred_labels = set(self._predict_dimension(model, text))
+                
+                # 更新混淆矩阵
+                for true_label in true_labels:
+                    for pred_label in pred_labels:
+                        if true_label == pred_label:
+                            metrics["confusion_matrix"][true_label]["tp"] += 1
+                        else:
+                            metrics["confusion_matrix"][true_label]["fn"] += 1
+                            metrics["confusion_matrix"][pred_label]["fp"] += 1
+                
+                # 收集错误案例
+                if true_labels != pred_labels:
+                    metrics["error_cases"].append({
+                        "text": text,
+                        "true": list(true_labels),
+                        "pred": list(pred_labels)
+                    })
+                
+                # 标签共现分析
+                label_list = list(true_labels)
+                for i in range(len(label_list)):
+                    for j in range(i+1, len(label_list)):
+                        metrics["label_correlation"][label_list[i]][label_list[j]] += 1
+                        metrics["label_correlation"][label_list[j]][label_list[i]] += 1
             
             # 计算每个标签的指标
-            per_label_metrics = {}
-            for label, stats in label_stats.items():
-                tp = stats["true_positives"]
-                fp = stats["false_positives"]
-                fn = stats["false_negatives"]
+            for label, counts in metrics["confusion_matrix"].items():
+                tp = counts["tp"]
+                fp = counts["fp"]
+                fn = counts["fn"]
                 
                 precision = tp / (tp + fp) if (tp + fp) > 0 else 0
                 recall = tp / (tp + fn) if (tp + fn) > 0 else 0
                 f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
                 
-                per_label_metrics[label] = {
+                metrics["per_label_metrics"][label] = {
                     "precision": precision,
                     "recall": recall,
                     "f1": f1,
                     "support": tp + fn
                 }
-                
-            metrics["per_label_metrics"] = per_label_metrics
             
-            logger.info(f"评估完成：{metrics}")
+            logger.info(f"{dimension} 维度评估完成")
             return metrics
             
         except Exception as e:
-            msg = f"模型评估失败：{str(e)}"
-            logger.error(msg)
-            raise RuntimeError(msg)
-            
-    def predict(self, text: str, k: int = 3) -> List[str]:
-        """预测标签"""
-        if not self.model:
-            raise ValueError("模型未训练")
-        
-        try:
-            # 获取预测结果
-            raw_prediction = self.model.predict(text, k=k)
-            
-            # FastText 返回格式: (labels, probs)
-            # labels 和 probs 都是一维数组
-            labels = raw_prediction[0]  # 标签数组
-            probs = raw_prediction[1]   # 概率数组
-            
-            threshold = self.config["prediction_threshold"]
-            results = []
-            
-            # 直接遍历原始返回值
-            for label, prob in zip(labels, probs):
-                if float(prob) > threshold:
-                    # 确保标签是字符串
-                    clean_label = str(label).replace("__label__", "")
-                    results.append(clean_label)
-                    
-            return results
-            
-        except Exception as e:
-            error_msg = (f"测失败：{str(e)}\n"
-                        f"输入文本：{text}\n"
-                        f"原始预测结果：{raw_prediction}")
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-            
-    def save_model(self):
-        """保存模型"""
-        if not self.model:
-            msg = "没有可保存的模型"
-            logger.error(msg)
-            raise ValueError(msg)
-            
-        try:
-            self.model_path.parent.mkdir(parents=True, exist_ok=True)
-            self.model.save_model(str(self.model_path))
-            logger.info(f"模型已保存：{self.model_path}")
-        except Exception as e:
-            msg = f"模型保存失败：{str(e)}"
-            logger.error(msg)
-            raise RuntimeError(msg)
-            
-    def load_model(self):
-        """加载模型"""
-        if not self.model_path.exists():
-            raise FileNotFoundError(f"模型文件不存在：{self.model_path}")
-            
-        try:
-            self.model = fasttext.load_model(str(self.model_path))
-        except Exception as e:
-            raise RuntimeError(f"模型加载失败：{str(e)}")
-            
+            logger.error(f"评估 {dimension} 维度失败: {str(e)}")
+            return {
+                "confusion_matrix": {},
+                "error_cases": [],
+                "label_correlation": {},
+                "per_label_metrics": {}
+            }
+    
     def save_metrics(self, metrics: Dict):
         """保存评估指标"""
         try:
-            self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.metrics_path, "w", encoding="utf-8") as f:
-                json.dump(metrics, f, indent=2, ensure_ascii=False)
-            logger.info(f"评估指标已保存：{self.metrics_path}")
+            metrics_file = TRAINING_DIR / "metrics.json"
+            
+            # 转换 defaultdict 为普通 dict
+            def convert_defaultdict(d):
+                if isinstance(d, defaultdict):
+                    d = dict(d)
+                for k, v in d.items():
+                    if isinstance(v, defaultdict):
+                        d[k] = dict(v)
+                    elif isinstance(v, dict):
+                        d[k] = convert_defaultdict(v)
+                return d
+            
+            # 处理指标数据
+            metrics_data = convert_defaultdict(metrics)
+            
+            # 保存到文件
+            with open(metrics_file, "w", encoding="utf-8") as f:
+                json.dump(metrics_data, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"评估指标已保存：{metrics_file}")
+            
         except Exception as e:
-            msg = f"指标保存失败：{str(e)}"
-            logger.error(msg)
-            raise RuntimeError(msg)
-            
-    def _calculate_metrics(self, y_true: List[set], y_pred: List[set]) -> Dict:
-        """计算评估指标"""
-        if not y_true or not y_pred:
-            return {
-                "precision": 0.0,
-                "recall": 0.0,
-                "f1": 0.0,
-                "samples": 0
-            }
-        
-        # 使用列表推导式计算，避免 NumPy
-        precisions = []
-        recalls = []
-        
-        for true_labels, pred_labels in zip(y_true, y_pred):
-            if pred_labels:  # 避免除零错误
-                precision = len(true_labels & pred_labels) / len(pred_labels)
-                precisions.append(precision)
-            
-            if true_labels:  # 避免除零错误
-                recall = len(true_labels & pred_labels) / len(true_labels)
-                recalls.append(recall)
-        
-        # 计算平均值
-        avg_precision = sum(precisions) / len(precisions) if precisions else 0.0
-        avg_recall = sum(recalls) / len(recalls) if recalls else 0.0
-        
-        # 计算 F1
-        f1 = 2 * avg_precision * avg_recall / (avg_precision + avg_recall) if (avg_precision + avg_recall) > 0 else 0.0
-        
-        return {
-            "precision": float(avg_precision),
-            "recall": float(avg_recall),
-            "f1": float(f1),
-            "samples": len(y_true)
-        } 
-
-    def print_metrics(self, metrics: Dict):
-        """打印评估指标"""
-        print("\n整体评估指标：")
-        print(f"Precision: {metrics['precision']:.4f}")
-        print(f"Recall: {metrics['recall']:.4f}")
-        print(f"F1 Score: {metrics['f1']:.4f}")
-        print(f"样本数: {metrics['samples']}")
-        
-        if 'per_label_metrics' in metrics:
-            print("\n各标签评估指标：")
-            for label, label_metrics in metrics['per_label_metrics'].items():
-                if label_metrics['support'] > 0:  # 只显示有样本的标签
-                    print(f"\n{label}:")
-                    print(f"  Precision: {label_metrics['precision']:.4f}")
-                    print(f"  Recall: {label_metrics['recall']:.4f}")
-                    print(f"  F1 Score: {label_metrics['f1']:.4f}")
-                    print(f"  Support: {label_metrics['support']}") 
-
-    def _enhance_features(self, text: str) -> str:
-        """增强特征工程"""
-        features = []
-        
-        # 1. 原始文本特征
-        features.append(text)
-        
-        # 2. 分词并清理
-        words = text.split()
-        clean_words = []
-        for word in words:
-            # 移除特殊字符
-            word = re.sub(r'[^\w\u4e00-\u9fff]', '', word)
-            if word and len(word) > 1:  # 忽略空字符和单字符
-                clean_words.append(word.lower())
-        
-        # 3. n-gram 特征
-        for i in range(len(clean_words)-1):
-            # 2-gram
-            features.append(f"bigram_{clean_words[i]}_{clean_words[i+1]}")
-            
-            # 3-gram
-            if i < len(clean_words)-2:
-                features.append(f"trigram_{clean_words[i]}_{clean_words[i+1]}_{clean_words[i+2]}")
-        
-        # 4. 字符级特征
-        for word in clean_words:
-            if len(word) > 2:
-                # 前缀和后缀
-                features.append(f"prefix_{word[:3]}")
-                features.append(f"suffix_{word[-3:]}")
-                
-                # 字符 bigram
-                for i in range(len(word)-1):
-                    features.append(f"char_bigram_{word[i:i+2]}")
-        
-        # 5. 领域特征
-        for domain, info in self.config.get("domains", {}).items():
-            keywords = info.get("keywords", [])
-            if any(kw in text.lower() for kw in keywords):
-                features.append(f"domain_{domain}")
-        
-        # 6. 内容类型特征
-        for ctype, keywords in self.config.get("content_types", {}).items():
-            if any(kw in text.lower() for kw in keywords):
-                features.append(f"content_{ctype}")
-            
-        return " ".join(features)
-
-    def _balance_dataset(self, samples: List[str], min_samples: int = 10) -> List[str]:
-        """平衡数据集"""
-        from collections import defaultdict
-        import random
-        
-        # 按标签分组
-        label_samples = defaultdict(list)
-        for sample in samples:
-            labels = [l for l in sample.split() if l.startswith("__label__")]
-            for label in labels:
-                label_samples[label].append(sample)
-        
-        # 统计标签分布
-        label_counts = {label: len(samples) for label, samples in label_samples.items()}
-        avg_count = sum(label_counts.values()) / len(label_counts)
-        
-        # 平衡数据集
-        balanced_samples = []
-        for label, samples in label_samples.items():
-            count = len(samples)
-            
-            if count < min_samples:
-                # 过采样
-                multiplier = min_samples // count + 1
-                augmented = samples * multiplier
-                # 添加随机噪声
-                augmented.extend([self._add_noise(s) for s in samples[:min_samples-len(augmented)]])
-                balanced_samples.extend(augmented[:min_samples])
-            elif count > avg_count * 2:
-                # 欠采样
-                target_count = int(avg_count * 1.5)
-                balanced_samples.extend(random.sample(samples, target_count))
-            else:
-                balanced_samples.extend(samples)
-        
-        return balanced_samples
-
-    def _add_noise(self, sample: str) -> str:
-        """添加随机噪声进行数据增强"""
-        # 分离标签和特征
-        parts = sample.split(" ", 1)
-        if len(parts) != 2:
-            return sample
-        
-        labels, text = parts
-        words = text.split()
-        
-        # 随机操作
-        if random.random() < 0.3:  # 30% 概率删除词
-            if len(words) > 3:
-                del_idx = random.randint(0, len(words)-1)
-                words.pop(del_idx)
-                
-        if random.random() < 0.3:  # 30% 概率重复词
-            if words:
-                dup_idx = random.randint(0, len(words)-1)
-                words.insert(dup_idx, words[dup_idx])
-                
-        if random.random() < 0.3:  # 30% 概率打乱词序
-            if len(words) > 2:
-                start = random.randint(0, len(words)-2)
-                words[start], words[start+1] = words[start+1], words[start]
-        
-        return f"{labels} {' '.join(words)}" 
+            logger.error(f"保存评估指标失败：{str(e)}")
+            raise

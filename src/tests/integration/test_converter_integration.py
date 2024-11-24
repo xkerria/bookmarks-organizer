@@ -27,8 +27,7 @@ class TestConverterIntegration:
         return bookmarks_file
         
     def test_full_conversion_process(self, test_data_dir, sample_bookmarks_file):
-        """测试���整的转换流程"""
-        # 准备输出目录
+        """测试完整的转换流程"""
         output_dir = test_data_dir / "training"
         output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -36,8 +35,7 @@ class TestConverterIntegration:
         converter = BookmarkConverter()
         converter.convert_to_fasttext(
             input_file=sample_bookmarks_file,
-            output_dir=output_dir,
-            test_size=0.2
+            output_dir=output_dir
         )
         
         # 验证输出文件

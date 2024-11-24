@@ -8,6 +8,11 @@ import html
 from src.config import config
 import random
 from tqdm import tqdm
+from collections import defaultdict
+import logging
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 class BookmarkConverter:
     def __init__(self):
@@ -17,77 +22,61 @@ class BookmarkConverter:
         self.feature_config = self.config["feature_extraction"]
         self.output_format = self.config["output_format"]
 
-    def convert_to_fasttext(self, input_file: Path, output_dir: Path, test_size: float = 0.2):
-        """将书签文件转换为 FastText 训练格式"""
-        if not input_file.exists():
-            raise FileNotFoundError(f"输入文件不存在：{input_file}")
-            
+    def convert_to_fasttext(self, input_file: Path, output_dir: Path):
+        """转换书签为FastText训练数据"""
         try:
-            # 确保输出目录存在
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
+            # 加载书签
             bookmarks = self._load_bookmarks(input_file)
-            print(f"加载书签数：{len(bookmarks)}")
+            logger.info(f"加载了 {len(bookmarks)} 个书签")
             
-            if not bookmarks:
-                raise ValueError("未找到任何书签数据")
-                
-            # 去重处理
+            # 去重
             bookmarks = self.deduplicate_bookmarks(bookmarks)
-            print(f"去重后书签数：{len(bookmarks)}")
+            logger.info(f"去重后剩余 {len(bookmarks)} 个书签")
             
+            # 处理书签
             training_data = []
-            skipped = 0
-            no_labels = 0
-            
-            with tqdm(total=len(bookmarks), desc="处理书签") as pbar:
-                for bookmark in bookmarks:
-                    try:
-                        labels, features = self._process_bookmark(bookmark)
-                        
-                        # 确保至少有一个标签
-                        if not labels:
-                            no_labels += 1
-                            # 添加默认标签
-                            labels.add("type_other")
-                            labels.add("domain_other")
-                            labels.add("content_other")
-                        
-                        if features:
-                            label_str = " ".join([f"{self.output_format['label_prefix']}_{label}" for label in labels])
-                            training_data.append(f"{label_str} {features}")
-                        else:
-                            skipped += 1
-                            print(f"警告：跳过无特征的书签：{bookmark.get('title', '未知')}")
-                        
-                        pbar.update(1)
-                    except Exception as e:
-                        skipped += 1
-                        print(f"警告：处理书签时出错，已跳过：{bookmark.get('title', '未知')} - {str(e)}")
-                        continue
-
+            for bookmark in tqdm(bookmarks, desc="处理书签"):
+                try:
+                    labels, text = self._process_bookmark(bookmark)
+                    if labels and text:
+                        # 格式化训练数据
+                        label_str = " ".join(f"__label__{label}" for label in labels)
+                        training_data.append(f"{label_str} {text}")
+                except Exception as e:
+                    logger.warning(f"处理书签时出错，已跳过：{bookmark.get('title', '')} - {str(e)}")
+                    
             if not training_data:
                 raise ValueError("没有生成任何有效的训练数据")
-
-            # 分割数据集
-            train_data, test_data = self.split_dataset(training_data, test_size)
+                
+            # 创建输出目录
+            output_dir.mkdir(parents=True, exist_ok=True)
             
-            # 保存训练集
+            # 分割数据集
+            train_data, test_data = self.split_dataset(training_data)
+            
+            # 保存数据集
             train_file = output_dir / "train.txt"
+            test_file = output_dir / "test.txt"
+            
             with open(train_file, "w", encoding="utf-8") as f:
                 f.write("\n".join(train_data))
                 
-            # 保存测试集
-            test_file = output_dir / "test.txt"
             with open(test_file, "w", encoding="utf-8") as f:
                 f.write("\n".join(test_data))
                 
-            print(f"\n数据集分割:")
-            print(f"训练集样本数：{len(train_data)}")
-            print(f"测试集样本数：{len(test_data)}")
+            logger.info(f"已生成训练集 ({len(train_data)} 条) 和测试集 ({len(test_data)} 条)")
+            logger.info(f"数据已保存到: {output_dir}")
             
         except Exception as e:
-            raise RuntimeError(f"转换过程中出错：{str(e)}")
+            error_msg = f"转换过程中出错：{str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+
+    def split_dataset(self, data: List[str], test_size: float = 0.2) -> Tuple[List[str], List[str]]:
+        """分割数据集为训练集和测试集"""
+        random.shuffle(data)
+        split_idx = int(len(data) * (1 - test_size))
+        return data[:split_idx], data[split_idx:]
 
     def _load_bookmarks(self, file_path: Path) -> List[Dict]:
         """加载书签文件"""
@@ -104,121 +93,161 @@ class BookmarkConverter:
             })
         return bookmarks
 
-    def _process_bookmark(self, bookmark: Dict) -> Tuple[Set[str], str]:
-        """处理单个书签，返回标签集合和特征文本"""
-        title = bookmark["title"]
-        url = bookmark["url"]
-        
-        # 清理和标准化文本
-        clean_title = self._clean_text(title)
-        domain = urlparse(url).netloc
-        
-        # 收集标签
-        labels = set()
-        
-        # 1. 处理前缀标签
-        prefix_label = self._extract_prefix_label(title)
-        if prefix_label:
-            labels.add(prefix_label)
-        
-        # 2. 领域标签
-        domain_label = self._get_domain_label(clean_title, url)
-        if domain_label:
-            labels.add(domain_label)
-        
-        # 3. 内容形式标签
-        content_label = self._get_content_type_label(clean_title, url)
-        if content_label:
-            labels.add(content_label)
-        
-        # 构建特征文本
+    def _process_bookmark(self, bookmark: Dict) -> Tuple[List[str], str]:
+        """处理单个书签"""
+        labels = []
         features = []
         
-        # 1. 清理后的标题
-        features.append(clean_title)
+        # 1. 处理标题和URL
+        title = bookmark.get("title", "").strip()
+        url = bookmark.get("url", "").strip()
         
-        # 2. 域名特征
+        # 2. 提取URL特征
+        if url:
+            domain = urlparse(url).netloc
+            path = urlparse(url).path
+            features.extend(self._extract_url_features(domain, path))
+        
+        # 3. 提取标题特征
+        if title:
+            # 处理标签前缀
+            prefix_labels = self._extract_prefix_labels(title)
+            if prefix_labels:
+                labels.extend(prefix_labels)
+                # 移除标题中的标签前缀
+                title = self._remove_prefixes(title)
+            
+            # 提取标题特征
+            features.extend(self._extract_title_features(title))
+        
+        # 4. 领域分类
+        domain_labels = self._classify_domain(title, url)
+        labels.extend(domain_labels)
+        
+        # 5. 内容类型分类
+        content_labels = self._classify_content_type(title, url)
+        labels.extend(content_labels)
+        
+        # 6. 确保标签唯一性
+        labels = list(set(labels))
+        
+        # 7. 组合特征
+        text = " ".join(features)
+        
+        return labels, text
+
+    def _extract_url_features(self, domain: str, path: str) -> List[str]:
+        """提取URL特征"""
+        features = []
+        
+        # 域名特征 (修改格式)
         features.append(f"domain_{domain.replace('.', '_')}")
         
-        # 3. URL 路径关键词
-        path_keywords = self._extract_path_keywords(url)
-        features.extend(path_keywords)
+        # 子域名特征
+        parts = domain.split(".")
+        if len(parts) > 2:
+            features.append(f"subdomain_{parts[0]}")
         
-        return labels, " ".join(features)
+        # 路径特征
+        path_parts = [p for p in path.split("/") if p]
+        for i, part in enumerate(path_parts[:self.config["path_processing"]["max_segments"]]):
+            if len(part) >= self.config["path_processing"]["min_segment_length"]:
+                features.append(f"path_{part}")
+        
+        return features
 
-    def _clean_text(self, text: str) -> str:
-        """清理和标准化文本"""
-        # 移除 HTML 实体
-        text = html.unescape(text)
+    def _extract_title_features(self, title: str) -> List[str]:
+        """提取标题特征"""
+        features = []
         
-        # 移除前缀标记
-        text = re.sub(r'^(doc|pkg|api|ref|tool|res|blog):\s*', '', text.lower())
+        # 分词
+        words = title.split()
         
-        # 移除特殊字符，但保留中文
-        text = re.sub(r'[^\w\s\u4e00-\u9fff]', ' ', text)
+        # 过滤短词
+        words = [w for w in words if len(w) >= self.config["text_cleaning"]["min_word_length"]]
         
-        # 移除多余空白
-        text = re.sub(r'\s+', ' ', text)
+        # 添加词特征
+        features.extend(words)
         
-        # 移除常见无意义词
-        stop_words = {'的', '了', '和', '与', '或', '及', '等', 'the', 'a', 'an', 'and', 'or'}
-        words = text.split()
-        words = [w for w in words if w not in stop_words]
+        # 添加词组特征
+        if len(words) >= 2:
+            for i in range(len(words)-1):
+                features.append(f"{words[i]}_{words[i+1]}")
         
-        return ' '.join(words).strip()
+        return features
 
-    def _extract_prefix_label(self, title: str) -> str:
-        """提取前缀标签"""
-        match = re.match(r'^(doc|pkg|api|ref|tool|res|blog):', title.lower())
-        if match:
-            prefix = match.group(1)
-            return f"type_{prefix}"
-        return ""
-
-    def _get_domain_label(self, title: str, url: str) -> str:
-        """获取领域签"""
-        text = f"{title} {url}".lower()
-        for domain_name, domain_info in self.domains.items():
-            if (any(kw in text for kw in domain_info["keywords"]) or
-                any(d in url for d in domain_info["domains"])):
-                return f"domain_{domain_name}"
-        return ""
-
-    def _get_content_type_label(self, title: str, url: str) -> str:
-        """获取内容形式标签"""
-        text = f"{title} {url}".lower()
-        for type_name, keywords in self.content_types.items():
-            if any(kw in text for kw in keywords):
-                return f"content_{type_name}"
-        return ""
-
-    def _extract_path_keywords(self, url: str) -> List[str]:
-        """从 URL 路径中提取关键词"""
-        path = urlparse(url).path
-        keywords = []
+    def _extract_prefix_labels(self, title: str) -> List[str]:
+        """提取标题中的前缀标签"""
+        labels = []
         
-        # 分割路径
-        parts = [p for p in path.split('/') if p]
+        # 1. 处理连续前缀标签
+        prefix_pattern = r'^((?:(?:doc|tip|res|entry|pkg|api|ref|tool|blog):)+)'
+        prefix_match = re.match(prefix_pattern, title.lower())
         
-        for part in parts:
-            # 移除文件扩展名
-            part = re.sub(r'\.[a-z]+$', '', part.lower())
-            
-            # 分割驼峰命名
-            part = re.sub(r'([a-z])([A-Z])', r'\1 \2', part).lower()
-            
-            # 分割数字和字母
-            part = re.sub(r'(\d+)([a-z])', r'\1 \2', part)
-            part = re.sub(r'([a-z])(\d+)', r'\1 \2', part)
-            
-            # 移除特殊字符
-            clean_parts = re.split(r'[-_]', part)
-            
-            for clean_part in clean_parts:
-                if clean_part and len(clean_part) > 1:  # 忽略单字符
-                    keywords.append(f"path_{clean_part}")
+        if prefix_match:
+            # 获取所有前缀
+            prefix_str = prefix_match.group(1)
+            # 分割多个前缀
+            prefixes = [p.rstrip(':') for p in prefix_str.split(':') if p]
+            # 为每个前缀生成标签
+            for prefix in prefixes:
+                labels.append(f"type_{prefix}")
+        
+        # 2. 处理领域标签
+        for domain, config in self.domains.items():
+            if any(kw in title.lower() for kw in config["keywords"]):
+                labels.append(f"domain_{domain}")
+        
+        # 3. 处理内容类型标签
+        for content_type, keywords in self.content_types.items():
+            if any(kw in title.lower() for kw in keywords):
+                labels.append(f"content_{content_type}")
+        
+        return labels
+
+    def _remove_prefixes(self, title: str) -> str:
+        """移除标题中的标签前缀"""
+        prefix_pattern = r'^((?:(?:doc|tip|res|entry|pkg|api|ref|tool|blog):)+)'
+        return re.sub(prefix_pattern, '', title).strip()
+
+    def _classify_domain(self, title: str, url: str) -> List[str]:
+        """根据标题和URL分类领域"""
+        domains = []
+        
+        # 1. 检查URL域名
+        domain = urlparse(url).netloc
+        for domain_name, config in self.domains.items():
+            if any(d in domain for d in config["domains"]):
+                domains.append(f"domain_{domain_name}")
+                break
                 
-        return keywords[:5]  # 限制关键词数量
+        # 2. 检查标题关键词
+        if not domains:  # 如果通过域名没有找到匹配
+            for domain_name, config in self.domains.items():
+                if any(kw in title.lower() for kw in config["keywords"]):
+                    domains.append(f"domain_{domain_name}")
+                    break
+                    
+        # 3. 如果没有匹配到任何领域，添加其他类别
+        if not domains:
+            domains.append("domain_other")
+            
+        return domains
+
+    def _classify_content_type(self, title: str, url: str) -> List[str]:
+        """根据标题和URL分类内容类型"""
+        content_types = []
+        
+        # 检查标题中的内容类型关键词
+        for content_type, keywords in self.content_types.items():
+            if any(kw in title.lower() for kw in keywords):
+                content_types.append(f"content_{content_type}")
+                
+        # 如果没有匹配到任何内容类型，添加其他类别
+        if not content_types:
+            content_types.append("content_other")
+            
+        return content_types
 
     def deduplicate_bookmarks(self, bookmarks: List[Dict]) -> List[Dict]:
         """去重并统一标签"""
@@ -250,16 +279,52 @@ class BookmarkConverter:
         
         return list(url_map.values())
 
-    def split_dataset(self, training_data: List[str], test_size: float = 0.2, random_seed: int = 42) -> Tuple[List[str], List[str]]:
-        """将数据集分割为训练集和测试集"""
-        random.seed(random_seed)
-        random.shuffle(training_data)
+    def _clean_text(self, text: str) -> str:
+        """清理文本"""
+        if self.config["text_cleaning"]["remove_html_tags"]:
+            text = re.sub(r'<[^>]+>', '', text)
         
-        split_point = int(len(training_data) * (1 - test_size))
-        train_set = training_data[:split_point]
-        test_set = training_data[split_point:]
+        if self.config["text_cleaning"]["remove_punctuation"]:
+            text = re.sub(r'[^\w\s]', ' ', text)
         
-        return train_set, test_set
+        if self.config["text_cleaning"]["lowercase"]:
+            text = text.lower()
+        
+        # 处理多余空格
+        text = ' '.join(text.split())
+        
+        # 截断长文本
+        max_length = self.config["text_cleaning"]["max_text_length"]
+        if len(text) > max_length:
+            text = text[:max_length]
+        
+        return text
+
+    def _extract_path_keywords(self, url: str) -> List[str]:
+        """提取URL路径关键词"""
+        path = urlparse(url).path
+        segments = [s for s in path.split('/') if s]
+        
+        # 过滤配置中定义的忽略扩展名和片段
+        ignore_exts = self.config["path_processing"]["ignore_extensions"]
+        ignore_segs = self.config["path_processing"]["ignore_segments"]
+        
+        keywords = []
+        for segment in segments:
+            # 移除扩展名
+            segment = segment.split('.')[0]
+            
+            # 跳过忽略的片段
+            if segment in ignore_segs:
+                continue
+            
+            # 检查最小长度
+            if len(segment) >= self.config["path_processing"]["min_segment_length"]:
+                keywords.append(segment)
+                
+        # 限制关键词数量
+        max_keywords = self.config["path_processing"]["max_segments"]
+        return keywords[:max_keywords]
 
 
 def main():
