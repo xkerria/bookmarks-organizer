@@ -10,6 +10,7 @@ from collections import defaultdict
 from gensim.models import KeyedVectors
 import jieba
 import numpy as np
+from urllib.parse import urlparse
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ class FastTextModel:
     def __init__(self):
         self.config = config.config["model"]["fasttext"]
         # 分层模型
-        self.type_model = None      # 类型分类��
+        self.type_model = None      # 类型分类
         self.domain_model = None    # 领域分类器
         self.content_model = None   # 内容分类器
         
@@ -301,6 +302,59 @@ class FastTextModel:
             features.extend(semantic_features)
         
         return " ".join(features)
+    
+    def _enhance_url_features(self, url: str) -> List[str]:
+        """增强URL特征"""
+        features = []
+        parsed = urlparse(url)
+        
+        # 域名分层特征
+        domain_parts = parsed.netloc.split('.')
+        features.extend([f"domain_{i}_{part}" for i, part in enumerate(domain_parts)])
+        
+        # 路径语义特征
+        path_parts = [p for p in parsed.path.split('/') if p]
+        if path_parts:
+            # 路径深度特征
+            features.append(f"path_depth_{len(path_parts)}")
+            # 路径组合特征
+            for i in range(len(path_parts)-1):
+                features.append(f"path_seq_{path_parts[i]}_{path_parts[i+1]}")
+        
+        return features
+    
+    def _enhance_semantic_features(self, text: str) -> List[str]:
+        """增强语义特征"""
+        features = []
+        
+        # 分词
+        words = jieba.lcut(text)
+        word_vectors = []
+        
+        # 收集词向量
+        for word in words:
+            if word in self.word_vectors:
+                word_vectors.append(self.word_vectors[word])
+                # 获取相似词
+                similar_words = self.word_vectors.most_similar(
+                    word, 
+                    topn=self.config["word_vectors"].get("max_similar_words", 3)
+                )
+                for sim_word, score in similar_words:
+                    if score >= self.config["word_vectors"].get("min_similarity", 0.6):
+                        features.append(f"sim_{sim_word}")
+        
+        # 如果有足够的词向量，计算主题特征
+        if len(word_vectors) >= 2:
+            avg_vector = np.mean(word_vectors, axis=0)
+            topic_words = self.word_vectors.similar_by_vector(
+                avg_vector,
+                topn=3
+            )
+            for topic_word, score in topic_words:
+                features.append(f"topic_{topic_word}")
+        
+        return features
     
     def _evaluate_dimension(self, dimension: str, model: Any, valid_file: Path) -> Dict:
         """评估单个维度的模型性能"""
