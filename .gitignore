@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+env/
 build/
 develop-eggs/
 dist/
@@ -19,25 +20,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
-# 测试和覆盖率
-.pytest_cache/
-.coverage
-.coverage.*
-coverage.xml
-htmlcov/
-tests/.coverage
-tests/coverage/
-tests/htmlcov/
-
-# 虚拟环境
+.venv/
 venv/
-env/
-ENV/
-.env
-.venv
-env.bak/
-venv.bak/
 
 # IDE
 .idea/
@@ -45,51 +29,64 @@ venv.bak/
 *.swp
 *.swo
 .DS_Store
-*.sublime-project
-*.sublime-workspace
-.project
-.pydevproject
-.settings/
 
-# 项目数据目录
-data/analysis/*
-!data/analysis/.gitkeep
+# 项目特定
+data/pretrained/*
+!data/pretrained/.gitkeep
 data/input/*
 !data/input/.gitkeep
 data/output/*
 !data/output/.gitkeep
-data/training/*
-!data/training/.gitkeep
 data/logs/*
 !data/logs/.gitkeep
-tests/data/*
-!tests/data/.gitkeep
+data/training/*
+!data/training/.gitkeep
+data/analysis/*
+!data/analysis/.gitkeep
 
-# 本地配置
-.env
-.env.local
-.env.*.local
-config.local.yaml
-config.*.local.yaml
+# 预训练词向量和模型文件
+*.vec
+*.bin
+*.model
+*.txt.gz
+*.bz2
+*.fasttext
+*.w2v
+*.npy
+*.npz
 
-# 日志
+# 日志和缓存
 *.log
-logs/
-*.log.*
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+.cache/
+.pytest_cache/
+__pycache__/
+.coverage
+coverage.xml
+.hypothesis/
+.benchmarks/
 
-# 临时文件
-*.tmp
-*.temp
-*.bak
-*.swp
-*~
-tmp-*
+# 环境配置
+.env
+.envrc
+.python-version
+pip-log.txt
+pip-delete-this-directory.txt
 
-# 保留示例文件
-!.env.example
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
 
-# 聊天记录
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# 性能测试
+.pytest_cache/
+.benchmarks/
+benchmark_results/
+
+# 其他
 chats/
+tests/
+.coverage*
