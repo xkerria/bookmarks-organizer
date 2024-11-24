@@ -23,8 +23,12 @@ wheels/
 # 测试和覆盖率
 .pytest_cache/
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
+tests/.coverage
+tests/coverage/
+tests/htmlcov/
 
 # 虚拟环境
 venv/

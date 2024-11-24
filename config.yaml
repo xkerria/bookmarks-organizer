@@ -23,3 +23,175 @@ paths:
   output: "data/output"
   analysis: "data/analysis"
   training: "data/training"
+
+# 转换器配置
+converter:
+  # 领域分类配置
+  domains:
+    技术:
+      keywords:
+        - 编程
+        - 开发
+        - python
+        - java
+        - javascript
+        - github
+        - 代码
+        - 框架
+        - 数据库
+        - 运维
+        - 部署
+      domains:
+        - github.com
+        - stackoverflow.com
+        - leetcode.com
+        - developer.
+        - docs.
+        - .dev
+    游戏娱乐:
+      keywords:
+        - 游戏
+        - 攻略
+        - 娱乐
+        - 动漫
+        - 直播
+        - steam
+        - ps5
+        - xbox
+        - switch
+        - moba
+        - rpg
+      domains:
+        - miyoushe.com
+        - steam.com
+        - xbox.com
+        - nintendo.com
+        - playstation.com
+        - bilibili.com
+    媒体资讯:
+      keywords:
+        - 新闻
+        - 资讯
+        - 博客
+        - 专栏
+        - 评论
+        - 观点
+        - 报道
+        - 杂志
+        - 媒体
+      domains:
+        - zhihu.com
+        - jianshu.com
+        - csdn.net
+        - medium.com
+        - juejin.cn
+        - weixin.qq.com
+
+  # 内容形式配置
+  content_types:
+    官方文档:
+      - docs
+      - document
+      - 文档
+      - 手册
+      - 指南
+      - reference
+    教程指南:
+      - tutorial
+      - guide
+      - 教程
+      - 指南
+      - 入门
+      - 课程
+    工具应用:
+      - tool
+      - app
+      - 工具
+      - 应用
+      - 软件
+      - 插件
+    社区讨论:
+      - forum
+      - community
+      - 社区
+      - 讨论
+      - 问答
+      - 交流
+    博客文章:
+      - blog
+      - article
+      - 博客
+      - 文章
+      - 专栏
+      - post
+    视频内容:
+      - video
+      - 视频
+      - 直播
+      - live
+      - 课程
+      - 教学
+    资源素材:
+      - resource
+      - material
+      - 资源
+      - 素材
+      - 模板
+      - 源码
+
+  # 特征提取配置
+  feature_extraction:
+    max_path_keywords: 5
+    min_keyword_length: 2
+    stop_words:
+      - 的
+      - 了
+      - 和
+      - 与
+      - 或
+      - 及
+      - 等
+      - the
+      - a
+      - an
+      - and
+      - or
+      - in
+      - on
+      - at
+      - to
+      - for
+      - of
+      - with
+
+  # 输出格式配置
+  output_format:
+    label_prefix: "__label__"
+    feature_separator: " "
+
+  # 文本清理配置
+  text_cleaning:
+    remove_html_tags: true
+    remove_urls: false
+    remove_numbers: false
+    remove_punctuation: true
+    lowercase: true
+    min_word_length: 2
+    max_text_length: 1000
+
+  # 路径处理配置
+  path_processing:
+    max_segments: 5
+    min_segment_length: 2
+    ignore_extensions:
+      - html
+      - php
+      - aspx
+      - jsp
+      - htm
+    ignore_segments:
+      - www
+      - com
+      - cn
+      - org
+      - net

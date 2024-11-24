@@ -1,49 +1,59 @@
 from pathlib import Path
-from typing import Dict
 import yaml
 
-# 基础路径
-BASE_DIR = Path(__file__).parent.parent
-
-# 数据目录
-DATA_DIR = BASE_DIR / "data"
+# 添加目录配置
+ROOT_DIR = Path(__file__).parent.parent
+DATA_DIR = ROOT_DIR / "data"
+LOGS_DIR = DATA_DIR / "logs"
 INPUT_DIR = DATA_DIR / "input"
 OUTPUT_DIR = DATA_DIR / "output"
-LOGS_DIR = DATA_DIR / "logs"
-
-# 默认文件
-DEFAULT_INPUT_FILE = INPUT_DIR / "bookmarks.html"
-DEFAULT_OUTPUT_FILE = OUTPUT_DIR / "organized_bookmarks.html"
-
-# 确保所有目录存在
-for dir_path in [INPUT_DIR, OUTPUT_DIR, LOGS_DIR]:
-    dir_path.mkdir(parents=True, exist_ok=True)
+ANALYSIS_DIR = DATA_DIR / "analysis"
+TRAINING_DIR = DATA_DIR / "training"
 
 class Config:
     def __init__(self):
+        self.config_file = ROOT_DIR / "config.yaml"
         self.config = self._load_config()
     
-    def _load_config(self) -> Dict:
-        """从yaml文件加载配置"""
-        try:
-            with open('config.yaml', 'r') as f:
-                return yaml.safe_load(f)
-        except FileNotFoundError:
-            # 如果找不到主配置文件，尝试加载测试配置
-            test_config = Path('tests/test_config.yaml')
-            if test_config.exists():
-                with open(test_config, 'r') as f:
-                    return yaml.safe_load(f)
-            return {}
+    def _load_config(self) -> dict:
+        """加载配置文件"""
+        if not self.config_file.exists():
+            return self._get_default_config()
+            
+        with open(self.config_file, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
     
-    @property
-    def api_settings(self) -> Dict:
-        return self.config.get('api', {})
-    
-    @property
-    def testing(self) -> Dict:
-        return self.config.get('testing', {})
-    
-    @property
-    def monitoring(self) -> Dict:
-        return self.config.get('monitoring', {})
+    def _get_default_config(self) -> dict:
+        """获取默认配置"""
+        return {
+            "converter": {
+                "domains": {
+                    "技术": {
+                        "keywords": [
+                            "编程", "开发", "python", "java", "javascript",
+                            "github", "代码", "框架", "数据库", "运维", "部署",
+                        ],
+                        "domains": [
+                            "github.com", "stackoverflow.com", "leetcode.com",
+                            "developer.", "docs.", ".dev",
+                        ]
+                    },
+                    # ... 其他领域配置
+                },
+                "content_types": {
+                    "官方文档": ["docs", "document", "文档", "手册", "指南", "reference"],
+                    # ... 其他内容类型配置
+                },
+                "feature_extraction": {
+                    "max_path_keywords": 5,
+                    "min_keyword_length": 2,
+                    "stop_words": ["的", "了", "和", "与", "或", "及", "等", "the", "a", "an", "and", "or"],
+                },
+                "output_format": {
+                    "label_prefix": "__label__",
+                    "feature_separator": " ",
+                }
+            }
+        }
+
+config = Config()
