@@ -195,3 +195,25 @@ converter:
       - cn
       - org
       - net
+
+# 模型配置
+model:
+  fasttext:
+    # 训练参数
+    learning_rate: 0.1
+    epochs: 50
+    word_ngrams: 2
+    embedding_dim: 100
+    min_count: 1
+    loss_func: "ova"  # one-vs-all
+    
+    # 预测参数
+    prediction_threshold: 0.3
+    top_k: 3
+    
+    # 评估参数
+    metrics:
+      - precision
+      - recall
+      - f1
+      - per_label_metrics
